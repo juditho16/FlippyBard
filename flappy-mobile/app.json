@@ -4,12 +4,7 @@
     "slug": "flappy-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "resizeMode": "contain",
-      "backgroundColor": "#70c5ce"
-    },
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -22,8 +17,10 @@
       },
       "package": "com.anonymous.flappymobile"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
+    "extra": {
+      "eas": {
+        "projectId": "6907d530-0bfe-4b85-b380-7b4488620d3a"
+      }
     }
   }
 }
