@@ -1,7 +1,7 @@
 {
   "name": "flappy-mobile",
   "version": "1.0.0",
-  "main": "expo-router/entry",
+  "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
@@ -17,6 +17,7 @@
     "expo-av": "~14.0.5"
   },
   "devDependencies": {
+    "@babel/core": "^7.20.0",
     "@types/react": "~18.2.79",
     "typescript": "~5.3.3"
   },
