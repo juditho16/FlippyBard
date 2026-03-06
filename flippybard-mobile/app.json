@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Flappy Bird Mobile",
-    "slug": "flappy-mobile",
+    "name": "Flippy Bard",
+    "slug": "flippy-bard-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "assets/icon.png",
@@ -15,14 +15,20 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.flippybard.game"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "assets/adaptive-icon.png",
         "backgroundColor": "#70c5ce"
       },
-      "package": "com.anonymous.flappymobile"
+      "package": "com.flippybard.game",
+      "versionCode": 1,
+      "softwareKeyboardLayoutMode": "pan",
+      "permissions": [
+        "WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "assets/favicon.png"
