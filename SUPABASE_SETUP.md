@@ -1,23 +1,24 @@
 # Supabase Setup
 
-1. Create a `.env` file in `flippybard-mobile` from `.env.example`.
-2. Fill in for mobile (Expo):
+1. Create a project-root `.env` from `.env.example`.
+2. Fill in:
    - `EXPO_PUBLIC_SUPABASE_URL`
    - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
-   - `EXPO_PUBLIC_SUPABASE_TABLE` (optional; default is `flappy_leaderboard`)
-3. In the web project root (`FlippyBard/.env`), add:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
-   - `VITE_SUPABASE_TABLE` (optional; default is `flappy_leaderboard`)
-4. Ensure both apps use the same table name (`flappy_leaderboard` by default).
-5. In Supabase SQL Editor, run:
+   - `EXPO_PUBLIC_SUPABASE_TABLE` (optional, defaults to `flappy_leaderboard`)
+3. In the Supabase SQL Editor, run this schema setup:
 
 ```sql
 create table if not exists public.flappy_leaderboard (
   name text primary key,
   score integer not null default 0 check (score >= 0),
+  coins integer not null default 0 check (coins >= 0),
+  extra_lives integer not null default 0 check (extra_lives >= 0),
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.flappy_leaderboard
+  add column if not exists coins integer not null default 0,
+  add column if not exists extra_lives integer not null default 0;
 
 alter table public.flappy_leaderboard enable row level security;
 
@@ -41,12 +42,16 @@ using (true)
 with check (true);
 ```
 
-6. Restart both dev servers after adding `.env`:
+4. If you already created the old table with only `name`, `score`, and `updated_at`, the `alter table ... add column if not exists ...` lines above are the part that adds `coins` and `extra_lives` without deleting existing rows.
+5. Restart Expo after editing `.env`:
 
 ```bash
-# mobile
 npx expo start -c
-
-# web
-npm run dev
 ```
+
+6. After that, each player row in `flappy_leaderboard` should contain:
+   - `name`
+   - `score`
+   - `coins`
+   - `extra_lives`
+   - `updated_at`

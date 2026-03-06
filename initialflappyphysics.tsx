@@ -10,18 +10,6 @@ const GAME_HEIGHT = 600;
 const GAME_WIDTH = 400;
 const GAP_SIZE = 170;
 const GROUND_HEIGHT = 80;
-const MAX_LEADERBOARD_ENTRIES = 10;
-const LEADERBOARD_SYNC_INTERVAL_MS = 15000;
-
-const PLAYER_NAME_KEY = 'flappyPlayerName';
-const LEADERBOARD_KEY = 'flappyLeaderboard';
-
-const RAW_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const SUPABASE_URL = RAW_SUPABASE_URL ? RAW_SUPABASE_URL.replace(/\/+$/, '') : '';
-const SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) || '';
-const SUPABASE_TABLE =
-  (import.meta.env.VITE_SUPABASE_TABLE as string | undefined) || 'flappy_leaderboard';
-const SUPABASE_ENABLED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 type GameState = 'START' | 'PLAYING' | 'GAMEOVER';
 type Skin = 'gold' | 'blue' | 'pink' | 'green';
@@ -37,114 +25,6 @@ interface LeaderboardEntry {
   name: string;
   score: number;
 }
-
-const sanitizeName = (rawName: string) => (rawName.trim() || 'Anonymous').slice(0, 12);
-
-const toLeaderboardEntries = (value: unknown): LeaderboardEntry[] => {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .map((item) => {
-      if (!item || typeof item !== 'object') return null;
-      const row = item as { name?: unknown; score?: unknown };
-      if (typeof row.name !== 'string') return null;
-      const numericScore = typeof row.score === 'number' ? row.score : Number(row.score);
-      if (!Number.isFinite(numericScore)) return null;
-      return { name: row.name, score: numericScore };
-    })
-    .filter((entry): entry is LeaderboardEntry => entry !== null);
-};
-
-const normalizeLeaderboard = (entries: LeaderboardEntry[]) => {
-  const deduped = new Map<string, LeaderboardEntry>();
-
-  for (const entry of entries) {
-    const name = sanitizeName(entry.name);
-    const score = Math.max(0, Math.floor(entry.score));
-    const key = name.toLowerCase();
-    const existing = deduped.get(key);
-
-    if (!existing || score > existing.score) {
-      deduped.set(key, { name, score });
-    }
-  }
-
-  return [...deduped.values()]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_LEADERBOARD_ENTRIES);
-};
-
-const supabaseHeaders = () => ({
-  apikey: SUPABASE_ANON_KEY,
-  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-  'Content-Type': 'application/json',
-});
-
-const supabaseEndpoint = (query = '') => `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}${query}`;
-
-const fetchRemoteLeaderboard = async (): Promise<LeaderboardEntry[]> => {
-  if (!SUPABASE_ENABLED) return [];
-
-  const response = await fetch(
-    supabaseEndpoint(`?select=name,score&order=score.desc&limit=${MAX_LEADERBOARD_ENTRIES}`),
-    { headers: supabaseHeaders() }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to load Supabase leaderboard (${response.status})`);
-  }
-
-  const payload = await response.json();
-  return normalizeLeaderboard(toLeaderboardEntries(payload));
-};
-
-const saveRemoteBestScore = async (name: string, score: number): Promise<void> => {
-  if (!SUPABASE_ENABLED) return;
-
-  const encodedName = encodeURIComponent(name);
-  const lookupResponse = await fetch(
-    supabaseEndpoint(`?select=name,score&name=eq.${encodedName}`),
-    { headers: supabaseHeaders() }
-  );
-
-  if (!lookupResponse.ok) {
-    throw new Error(`Failed to check Supabase score (${lookupResponse.status})`);
-  }
-
-  const existingRows = toLeaderboardEntries(await lookupResponse.json());
-  const bestExisting = existingRows.reduce((max, item) => Math.max(max, item.score), -1);
-
-  if (bestExisting >= score) return;
-
-  if (existingRows.length > 0) {
-    const updateResponse = await fetch(supabaseEndpoint(`?name=eq.${encodedName}`), {
-      method: 'PATCH',
-      headers: {
-        ...supabaseHeaders(),
-        Prefer: 'return=minimal',
-      },
-      body: JSON.stringify({ score }),
-    });
-
-    if (!updateResponse.ok) {
-      throw new Error(`Failed to update Supabase score (${updateResponse.status})`);
-    }
-    return;
-  }
-
-  const insertResponse = await fetch(supabaseEndpoint(), {
-    method: 'POST',
-    headers: {
-      ...supabaseHeaders(),
-      Prefer: 'return=minimal',
-    },
-    body: JSON.stringify({ name, score }),
-  });
-
-  if (!insertResponse.ok) {
-    throw new Error(`Failed to insert Supabase score (${insertResponse.status})`);
-  }
-};
 
 // Synthesized Audio Utility
 const playSound = (type: 'flap' | 'score' | 'hit') => {
@@ -190,75 +70,17 @@ export default function App() {
   const [birdVel, setBirdVel] = useState(0);
   const [pipes, setPipes] = useState<PipeData[]>([]);
   const [score, setScore] = useState(0);
-  const [playerName, setPlayerName] = useState(
-    () => localStorage.getItem(PLAYER_NAME_KEY) || 'Player 1'
-  );
+  const [playerName, setPlayerName] = useState(localStorage.getItem('flappyPlayerName') || 'Player 1');
   const [skin, setSkin] = useState<Skin>('gold');
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(() => {
-    try {
-      return normalizeLeaderboard(
-        toLeaderboardEntries(JSON.parse(localStorage.getItem(LEADERBOARD_KEY) || '[]'))
-      );
-    } catch {
-      return [];
-    }
+    return JSON.parse(localStorage.getItem('flappyLeaderboard') || '[]');
   });
   
   const requestRef = useRef<number>();
   const lastPipeSpawnRef = useRef<number>(0);
-  const scoreRef = useRef(score);
-  const playerNameRef = useRef(playerName);
-  const leaderboardRef = useRef(leaderboard);
-  const gameOverHandledRef = useRef(false);
 
   const level = Math.floor(score / 5) + 1;
   const currentPipeSpeed = INITIAL_PIPE_SPEED + (level - 1) * 0.5;
-
-  useEffect(() => {
-    scoreRef.current = score;
-  }, [score]);
-
-  useEffect(() => {
-    playerNameRef.current = playerName;
-  }, [playerName]);
-
-  useEffect(() => {
-    leaderboardRef.current = leaderboard;
-  }, [leaderboard]);
-
-  const persistLeaderboard = useCallback((nextBoard: LeaderboardEntry[]) => {
-    leaderboardRef.current = nextBoard;
-    setLeaderboard(nextBoard);
-    localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(nextBoard));
-  }, []);
-
-  useEffect(() => {
-    if (!SUPABASE_ENABLED) return;
-
-    let isMounted = true;
-
-    const syncFromRemote = async () => {
-      try {
-        const remoteBoard = await fetchRemoteLeaderboard();
-        if (!isMounted || remoteBoard.length === 0) return;
-
-        const merged = normalizeLeaderboard([...leaderboardRef.current, ...remoteBoard]);
-        persistLeaderboard(merged);
-      } catch (error) {
-        console.warn('Supabase load failed, using local leaderboard:', error);
-      }
-    };
-
-    void syncFromRemote();
-    const intervalId = window.setInterval(() => {
-      void syncFromRemote();
-    }, LEADERBOARD_SYNC_INTERVAL_MS);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, [persistLeaderboard]);
 
   const flap = useCallback(() => {
     if (gameState === 'START') {
@@ -279,45 +101,40 @@ export default function App() {
     setPipes([]);
     setScore(0);
     setGameState('START');
-    gameOverHandledRef.current = false;
     lastPipeSpawnRef.current = 0;
   };
 
-  const updateLeaderboard = useCallback(
-    async (finalScore: number) => {
-      const safeScore = Math.max(0, Math.floor(finalScore));
-      const name = sanitizeName(playerNameRef.current);
+  const updateLeaderboard = useCallback((finalScore: number) => {
+    const name = (playerName.trim() || 'Anonymous').slice(0, 12);
+    let newLeaderboard = [...leaderboard];
+    
+    // Check if player already exists (case-insensitive)
+    const existingIndex = newLeaderboard.findIndex(
+      entry => entry.name.toLowerCase() === name.toLowerCase()
+    );
 
-      const nextLocalBoard = normalizeLeaderboard([
-        ...leaderboardRef.current,
-        { name, score: safeScore },
-      ]);
-      persistLeaderboard(nextLocalBoard);
-
-      if (!SUPABASE_ENABLED) return;
-
-      try {
-        await saveRemoteBestScore(name, safeScore);
-        const remoteBoard = await fetchRemoteLeaderboard();
-
-        if (remoteBoard.length > 0) {
-          const merged = normalizeLeaderboard([...nextLocalBoard, ...remoteBoard]);
-          persistLeaderboard(merged);
-        }
-      } catch (error) {
-        console.warn('Supabase sync failed, using local leaderboard:', error);
+    if (existingIndex !== -1) {
+      // Only update if the new score is higher
+      if (finalScore > newLeaderboard[existingIndex].score) {
+        newLeaderboard[existingIndex].score = finalScore;
+        newLeaderboard[existingIndex].name = name; // Update display name casing if changed
+      } else {
+        // If the new score is not higher, don't change anything
+        return;
       }
-    },
-    [persistLeaderboard]
-  );
+    } else {
+      // New player, add them to the list
+      newLeaderboard.push({ name, score: finalScore });
+    }
 
-  const handleGameOver = useCallback(() => {
-    if (gameOverHandledRef.current) return;
-    gameOverHandledRef.current = true;
-    setGameState('GAMEOVER');
-    playSound('hit');
-    void updateLeaderboard(scoreRef.current);
-  }, [updateLeaderboard]);
+    // Sort by score descending and keep top 10
+    const sortedLeaderboard = newLeaderboard
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+
+    setLeaderboard(sortedLeaderboard);
+    localStorage.setItem('flappyLeaderboard', JSON.stringify(sortedLeaderboard));
+  }, [leaderboard, playerName]);
 
   const spawnPipe = (timestamp: number) => {
     const spawnRate = Math.max(800, 1500 - (level * 50));
@@ -345,7 +162,9 @@ export default function App() {
     setBirdPos((pos) => {
       const newPos = pos + birdVel;
       if (newPos >= GAME_HEIGHT - GROUND_HEIGHT - BIRD_SIZE || newPos <= 0) {
-        handleGameOver();
+        setGameState('GAMEOVER');
+        playSound('hit');
+        updateLeaderboard(score);
         return pos;
       }
       return newPos;
@@ -370,7 +189,9 @@ export default function App() {
           birdLeft < pipe.x + PIPE_WIDTH &&
           (birdTop < pipe.topHeight || birdBottom > GAME_HEIGHT - GROUND_HEIGHT - pipe.bottomHeight)
         ) {
-          handleGameOver();
+          setGameState('GAMEOVER');
+          playSound('hit');
+          updateLeaderboard(score);
         }
 
         if (!pipe.passed && birdLeft > pipe.x + PIPE_WIDTH) {
@@ -384,7 +205,7 @@ export default function App() {
     });
 
     requestRef.current = requestAnimationFrame(gameLoop);
-  }, [birdPos, birdVel, gameState, currentPipeSpeed, handleGameOver]);
+  }, [birdPos, birdVel, gameState, currentPipeSpeed, score, updateLeaderboard]);
 
   useEffect(() => {
     if (gameState === 'PLAYING') {
@@ -458,7 +279,7 @@ export default function App() {
                 value={playerName}
                 onChange={(e) => {
                   setPlayerName(e.target.value);
-                  localStorage.setItem(PLAYER_NAME_KEY, e.target.value);
+                  localStorage.setItem('flappyPlayerName', e.target.value);
                 }}
                 maxLength={12}
               />
@@ -507,9 +328,6 @@ export default function App() {
               </div>
             ))
           )}
-        </div>
-        <div style={{ textAlign: 'center', color: '#95a5a6', marginTop: '12px', fontSize: '12px' }}>
-          {SUPABASE_ENABLED ? 'Synced with Supabase' : 'Local only (set VITE_SUPABASE_* to sync)'}
         </div>
       </div>
     </div>
