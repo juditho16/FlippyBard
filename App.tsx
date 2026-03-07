@@ -51,6 +51,22 @@ type Skin = 'gold' | 'blue' | 'pink' | 'green' | 'rainbow';
 type CollectibleType = 'GROW_EGG' | 'SHRINK_EGG' | 'COIN' | 'RAINBOW_EGG';
 type RoomRole = 'host' | 'guest';
 type LobbyMode = 'menu' | 'create_waiting' | 'join_input' | 'join_waiting';
+type Theme = 'meadow' | 'sea' | 'night' | 'mountain';
+
+const THEME_COLORS: Record<Theme, { bg: string; ground: string; grass: string; graffiti: string }> = {
+  meadow:   { bg: '#70c5ce', ground: '#ded895', grass: '#73bf2e', graffiti: 'FLIPPY BARD 2026' },
+  sea:      { bg: '#1a5276', ground: '#c2b280', grass: '#154360', graffiti: 'DEEP SEA VIBES' },
+  night:    { bg: '#0a0a2e', ground: '#1a1a2e', grass: '#0d1f0d', graffiti: 'MIDNIGHT FLIGHT' },
+  mountain: { bg: '#5b9bd5', ground: '#808080', grass: '#6b8e6b', graffiti: 'PEAK PERFORMANCE' },
+};
+
+const getTheme = (lvl: number): Theme => {
+  const c = ((lvl - 1) % 48);
+  if (c < 11) return 'meadow';
+  if (c < 24) return 'sea';
+  if (c < 36) return 'night';
+  return 'mountain';
+};
 
 interface PipeData {
   x: number;
@@ -206,6 +222,60 @@ const upsertRemotePlayerState = async (progress: PlayerProgress): Promise<void> 
   });
 };
 
+const fetchRemoteLeaderboard = async (): Promise<LeaderboardEntry[]> => {
+  if (!SUPABASE_ENABLED) return [];
+  try {
+    const response = await fetch(
+      supabaseEndpoint('?select=name,score&order=score.desc&limit=10'),
+      { headers: supabaseHeaders() }
+    );
+    if (!response.ok) return [];
+    const rows = (await response.json()) as unknown[];
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .map(r => {
+        if (!r || typeof r !== 'object') return null;
+        const row = r as { name?: unknown; score?: unknown };
+        if (typeof row.name !== 'string') return null;
+        const s = typeof row.score === 'number' ? row.score : Number(row.score);
+        if (!Number.isFinite(s)) return null;
+        return { name: sanitizeName(row.name), score: clampNonNegativeInt(s) };
+      })
+      .filter((e): e is LeaderboardEntry => e !== null);
+  } catch (e) {
+    return [];
+  }
+};
+
+const syncLocalLeaderboardToRemote = async (entries: LeaderboardEntry[]): Promise<void> => {
+  if (!SUPABASE_ENABLED) return;
+  for (const entry of entries) {
+    try {
+      const safeName = sanitizeName(entry.name);
+      const safeScore = clampNonNegativeInt(entry.score);
+      const existing = await fetchRemotePlayerState(safeName);
+      if (existing && existing.score >= safeScore) continue;
+      const payload = {
+        name: safeName,
+        score: safeScore,
+        coins: existing?.coins ?? 0,
+        extra_lives: existing?.extra_lives ?? 0,
+        updated_at: new Date().toISOString(),
+      };
+      const headers = { ...supabaseHeaders(), Prefer: 'return=minimal' };
+      if (existing) {
+        await fetch(supabaseEndpoint(`?name=eq.${encodeURIComponent(safeName)}`), {
+          method: 'PATCH', headers, body: JSON.stringify(payload),
+        });
+      } else {
+        await fetch(supabaseEndpoint(), {
+          method: 'POST', headers, body: JSON.stringify(payload),
+        });
+      }
+    } catch (e) {}
+  }
+};
+
 const generateRoomCode = () => {
   let code = '';
   for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
@@ -251,6 +321,51 @@ const DrawRabbit = () => (
 const DrawFish = () => (
   <View style={styles.fishBody}>
     <View style={styles.fishTailFin} /><View style={styles.fishEyeSmall} />
+  </View>
+);
+
+const DrawSeaweed = () => (
+  <View style={styles.seaweedContainer}>
+    <View style={styles.seaweedStalk} />
+    <View style={[styles.seaweedLeaf, { left: -6, top: 5 }]} />
+    <View style={[styles.seaweedLeaf, { right: -6, top: 15 }]} />
+    <View style={[styles.seaweedLeaf, { left: -5, top: 28 }]} />
+  </View>
+);
+
+const DrawOwl = () => (
+  <View style={styles.owlBody}>
+    <View style={styles.owlEarLeft} /><View style={styles.owlEarRight} />
+    <View style={styles.owlEyeLeft}><View style={styles.owlPupil} /></View>
+    <View style={styles.owlEyeRight}><View style={styles.owlPupil} /></View>
+    <View style={styles.owlBeak} />
+  </View>
+);
+
+const DrawEagle = () => (
+  <View style={styles.eagleBody}>
+    <View style={styles.eagleHead} />
+    <View style={styles.eagleWing} />
+    <View style={styles.eagleBeak} />
+    <View style={styles.eagleEye} />
+  </View>
+);
+
+const DrawPineTree = () => (
+  <View style={styles.pineContainer}>
+    <View style={[styles.pineTriangle, { bottom: 30, width: 24, borderBottomWidth: 18 }]} />
+    <View style={[styles.pineTriangle, { bottom: 18, width: 30, borderBottomWidth: 20 }]} />
+    <View style={[styles.pineTriangle, { bottom: 4, width: 36, borderBottomWidth: 22 }]} />
+    <View style={styles.pineTrunk} />
+  </View>
+);
+
+const DrawDeadTree = () => (
+  <View style={styles.deadTreeContainer}>
+    <View style={styles.deadTreeTrunk} />
+    <View style={styles.deadTreeBranchLeft} />
+    <View style={styles.deadTreeBranchRight} />
+    <View style={styles.deadTreeBranchSmall} />
   </View>
 );
 
@@ -311,7 +426,7 @@ export default function App() {
   const skinRef = useRef<Skin>(skin);
 
   const level = Math.floor(score / 5) + 1;
-  const isSeaTheme = level >= 12;
+  const theme: Theme = getTheme(level);
 
   const requestRef = useRef<number>();
   const lastFrameTimeRef = useRef<number | null>(null);
@@ -858,7 +973,13 @@ export default function App() {
     const curLevel = Math.floor(scoreRef.current / 5) + 1;
     const curSpeed = ( (curLevel >= 12 ? 3.7 : 3.0) + Math.min((curLevel - 1) * 0.35, 3.0) ) * frameScale;
 
-    setClouds(prev => prev.map(c => ({ ...c, x: c.x - (curSpeed * (curLevel >= 12 ? 0.1 : 0.3)), y: curLevel >= 12 ? c.y - 0.5 : c.y })).map(c => (c.x + (c.size||0) < -100 || c.y < -100) ? { ...c, x: SCREEN_WIDTH + 100, y: curLevel >= 12 ? SCREEN_HEIGHT : Math.random() * 200 + 50 } : c));
+    const curTheme = getTheme(curLevel);
+    const cloudSpeedMap: Record<Theme, number> = { meadow: 0.3, sea: 0.1, night: 0.15, mountain: 0.25 };
+    setClouds(prev => prev.map(c => {
+      const nx = c.x - (curSpeed * cloudSpeedMap[curTheme]);
+      const ny = curTheme === 'sea' ? c.y - 0.5 : c.y;
+      return { ...c, x: nx, y: ny };
+    }).map(c => (c.x + (c.size||0) < -100 || c.y < -100) ? { ...c, x: SCREEN_WIDTH + 100, y: curTheme === 'sea' ? SCREEN_HEIGHT : Math.random() * 200 + 50 } : c));
     setAnimals(prev => prev.map(a => ({ ...a, x: a.x - (curSpeed + (a.speed||0)), yOffset: Math.abs(Math.sin((timestamp + (a.x * 10)) / 200)) * 12 })).map(a => a.x < -100 ? { ...a, x: SCREEN_WIDTH + 100 } : a));
     setBushes(prev => prev.map(b => ({ ...b, x: b.x - curSpeed })).map(b => b.x < -150 ? { ...b, x: SCREEN_WIDTH + 150 } : b));
 
@@ -994,11 +1115,19 @@ export default function App() {
 
       if (SUPABASE_ENABLED) {
         try {
+          // Fetch full remote leaderboard and merge with local
+          const remoteBoard = await fetchRemoteLeaderboard();
+          const mergedBoard = normalizeLeaderboard([...lb, ...remoteBoard]);
+          await persistLeaderboard(mergedBoard);
+
+          // Sync all local leaderboard entries to Supabase
+          if (lb.length > 0) {
+            await syncLocalLeaderboardToRemote(lb);
+          }
+
+          // Sync current player's coins/lives
           const remoteState = await fetchRemotePlayerState(storedName);
           if (remoteState) {
-            const mergedBoard = normalizeLeaderboard([...lb, { name: remoteState.name, score: remoteState.score }]);
-            await persistLeaderboard(mergedBoard);
-
             if (hasLocalProgress) {
               const needsRemoteUpdate =
                 localCoins !== remoteState.coins ||
@@ -1034,10 +1163,19 @@ export default function App() {
   }, [persistLeaderboard, persistPlayerInventory]);
 
   useEffect(() => {
-    setAnimals(isSeaTheme ? [{ id:1, x: 100, y:0, speed: 1.2, collected: false }, { id:2, x: 350, y:0, speed: 0.5, collected: false }] : [{ id:1, x: 100, y:0, speed: 1.2, collected: false }, { id:2, x: 350, y:0, speed: 0.8, collected: false }]);
-    setBushes(isSeaTheme ? [] : [{ id:1, x: 50, y:0, scale: 1, collected: false }, { id:2, x: 250, y:0, scale: 0.8, collected: false }, { id:3, x: 450, y:0, scale: 1.1, collected: false }]);
-    setClouds(Array.from({ length: 6 }).map((_, i) => ({ id:i, x: (i * SCREEN_WIDTH / 2), y: Math.random() * 200 + 50, size: Math.random() * 60 + 50, collected: false })));
-  }, [SCREEN_WIDTH, isSeaTheme]);
+    setAnimals([{ id:1, x: 100, y:0, speed: 1.2, collected: false }, { id:2, x: 350, y:0, speed: theme === 'sea' ? 0.5 : 0.8, collected: false }]);
+    if (theme === 'meadow') {
+      setBushes([{ id:1, x: 50, y:0, scale: 1, collected: false }, { id:2, x: 250, y:0, scale: 0.8, collected: false }, { id:3, x: 450, y:0, scale: 1.1, collected: false }]);
+    } else if (theme === 'sea') {
+      setBushes([{ id:1, x: 80, y:0, scale: 1, collected: false }, { id:2, x: 280, y:0, scale: 0.8, collected: false }, { id:3, x: 480, y:0, scale: 1.1, collected: false }]);
+    } else if (theme === 'night') {
+      setBushes([{ id:1, x: 60, y:0, scale: 1, collected: false }, { id:2, x: 260, y:0, scale: 0.9, collected: false }, { id:3, x: 460, y:0, scale: 1.1, collected: false }]);
+    } else {
+      setBushes([{ id:1, x: 70, y:0, scale: 1, collected: false }, { id:2, x: 270, y:0, scale: 0.8, collected: false }, { id:3, x: 470, y:0, scale: 1.1, collected: false }]);
+    }
+    const cloudY = theme === 'sea' ? SCREEN_HEIGHT : undefined;
+    setClouds(Array.from({ length: 6 }).map((_, i) => ({ id:i, x: (i * SCREEN_WIDTH / 2), y: cloudY ?? (Math.random() * 200 + 50), size: Math.random() * 60 + 50, collected: false })));
+  }, [SCREEN_WIDTH, SCREEN_HEIGHT, theme]);
 
   useEffect(() => {
     birdPosRef.current = birdPos; birdVelRef.current = birdVel; scoreRef.current = score; gameStateRef.current = gameState;
@@ -1098,12 +1236,26 @@ export default function App() {
 
   return (
     <View
-      style={[styles.container, { backgroundColor: isSeaTheme ? '#1a5276' : '#70c5ce' }]}
+      style={[styles.container, { backgroundColor: THEME_COLORS[theme].bg }]}
       onStartShouldSetResponder={() => true}
       onResponderGrant={() => { if (gameState === 'PLAYING' || gameState === 'MULTI_PLAYING') flap(); }}
     >
       <StatusBar hidden />
-      {clouds.map((c, i) => ( <View key={`cloud-${i}`} style={[isSeaTheme ? styles.bubble : styles.cloud, { left: c.x, top: c.y, width: c.size, height: (c.size||0) * (isSeaTheme ? 1 : 0.6), borderRadius: (c.size||0) / 2 }]} /> ))}
+      {clouds.map((c, i) => ( <View key={`cloud-${i}`} style={[theme === 'sea' ? styles.bubble : theme === 'night' ? styles.nightCloud : styles.cloud, { left: c.x, top: c.y, width: c.size, height: (c.size||0) * (theme === 'sea' ? 1 : 0.6), borderRadius: (c.size||0) / 2 }]} /> ))}
+
+      {/* Moon and stars for night theme */}
+      {theme === 'night' && (
+        <>
+          <View style={styles.moon}>
+            <View style={[styles.moonCrater, { top: 8, left: 10, width: 10, height: 10 }]} />
+            <View style={[styles.moonCrater, { top: 22, left: 25, width: 7, height: 7 }]} />
+            <View style={[styles.moonCrater, { top: 14, left: 30, width: 5, height: 5 }]} />
+          </View>
+          {[{x:30,y:40,s:3},{x:80,y:100,s:2},{x:150,y:30,s:3},{x:200,y:80,s:2},{x:50,y:180,s:2},{x:120,y:150,s:3},{x:250,y:50,s:2},{x:300,y:120,s:3},{x:180,y:200,s:2},{x:350,y:30,s:2},{x:20,y:250,s:3},{x:280,y:180,s:2},{x:160,y:70,s:2},{x:90,y:220,s:3},{x:320,y:90,s:2}].map((star, i) => (
+            <View key={`star-${i}`} style={[styles.star, { left: star.x % SCREEN_WIDTH, top: star.y, width: star.s, height: star.s, borderRadius: star.s / 2 }]} />
+          ))}
+        </>
+      )}
 
       <View style={styles.header}>
         <View style={styles.headerLeft}>
@@ -1135,32 +1287,91 @@ export default function App() {
       {collectibles.map((c) => !c.collected && (
         <View key={c.id} style={[styles.collectible, { left: c.x, top: c.y }]}>
           {c.type === 'COIN' ? <Text style={{fontSize: 24}}>🪙</Text> :
-           isSeaTheme ? <DrawShell type={c.type as CollectibleType} colors={c.type === 'RAINBOW_EGG' ? RAINBOW_COLORS : undefined} /> :
+           theme === 'sea' ? <DrawShell type={c.type as CollectibleType} colors={c.type === 'RAINBOW_EGG' ? RAINBOW_COLORS : undefined} /> :
            <DrawEgg type={c.type as CollectibleType} colors={c.type === 'RAINBOW_EGG' ? RAINBOW_COLORS : undefined} />}
         </View>
       ))}
 
       {pipes.map((pipe, i) => (
         <React.Fragment key={i}>
-          <View style={[isSeaTheme ? styles.coral : styles.pipe, styles.pipeTop, { left: pipe.x, top: 0, height: pipe.topHeight }]}>{!isSeaTheme && <><View style={styles.logBark} /><View style={styles.logBarkAlt} /><View style={styles.logEnd} /></>}</View>
-          <View style={[isSeaTheme ? styles.coral : styles.pipe, styles.pipeBottom, { left: pipe.x, bottom: GROUND_HEIGHT, height: pipe.bottomHeight }]}>{!isSeaTheme && <><View style={styles.logBark} /><View style={styles.logBarkAlt} /><View style={[styles.logEnd, { top: 0, bottom: undefined }]} /></>}</View>
+          {/* Top pipe */}
+          <View style={[
+            theme === 'sea' ? styles.coral : theme === 'night' ? styles.stonePipe : theme === 'mountain' ? styles.pipe : styles.pipe,
+            styles.pipeTop, { left: pipe.x, top: 0, height: pipe.topHeight }
+          ]}>
+            {theme === 'meadow' && <><View style={styles.logBark} /><View style={styles.logBarkAlt} /><View style={styles.logEnd} /></>}
+            {theme === 'sea' && <><View style={[styles.coralPolyp, { top: 10, left: 8 }]} /><View style={[styles.coralPolyp, { top: 30, right: 10, backgroundColor: '#f1948a' }]} /><View style={[styles.coralPolyp, { bottom: 20, left: 15, backgroundColor: '#fadbd8' }]} /></>}
+            {theme === 'night' && <><View style={[styles.stoneCrack, { left: 12, top: 10, height: '40%' }]} /><View style={[styles.stoneCrack, { right: 18, top: '30%', height: '30%' }]} /><View style={[styles.stoneMoss, { bottom: 0 }]} /></>}
+            {theme === 'mountain' && <><View style={styles.logBark} /><View style={styles.logBarkAlt} /><View style={styles.logEnd} /><View style={styles.treePipeLeafCluster}><View style={styles.treePipeLeaf} /><View style={[styles.treePipeLeaf, { left: 10 }]} /><View style={[styles.treePipeLeaf, { left: 5, top: -8 }]} /></View></>}
+          </View>
+          {/* Bottom pipe */}
+          <View style={[
+            theme === 'sea' ? styles.coral : theme === 'night' ? styles.stonePipe : theme === 'mountain' ? styles.pipe : styles.pipe,
+            styles.pipeBottom, { left: pipe.x, bottom: GROUND_HEIGHT, height: pipe.bottomHeight }
+          ]}>
+            {theme === 'meadow' && <><View style={styles.logBark} /><View style={styles.logBarkAlt} /><View style={[styles.logEnd, { top: 0, bottom: undefined }]} /></>}
+            {theme === 'sea' && <><View style={[styles.coralPolyp, { top: 15, left: 10 }]} /><View style={[styles.coralPolyp, { top: 35, right: 8, backgroundColor: '#f1948a' }]} /><View style={[styles.coralPolyp, { top: 55, left: 20, backgroundColor: '#fadbd8' }]} /></>}
+            {theme === 'night' && <><View style={[styles.stoneCrack, { left: 15, top: '20%', height: '35%' }]} /><View style={[styles.stoneCrack, { right: 12, top: '50%', height: '25%' }]} /><View style={[styles.stoneMoss, { top: 0, bottom: undefined }]} /></>}
+            {theme === 'mountain' && <><View style={styles.logBark} /><View style={styles.logBarkAlt} /><View style={[styles.logEnd, { top: 0, bottom: undefined }]} /><View style={[styles.treePipeLeafCluster, { top: 0, bottom: undefined }]}><View style={styles.treePipeLeaf} /><View style={[styles.treePipeLeaf, { left: 10 }]} /><View style={[styles.treePipeLeaf, { left: 5, top: 8 }]} /></View></>}
+          </View>
         </React.Fragment>
       ))}
-      <View style={[styles.ground, { backgroundColor: isSeaTheme ? '#2e86c1' : '#ded895' }]}>
-        {!isSeaTheme && bushes.map((b, i) => (
+      <View style={[styles.ground, { backgroundColor: THEME_COLORS[theme].ground }]}>
+        {/* Sea waves at ground top */}
+        {theme === 'sea' && (
+          <View style={styles.waveContainer}>
+            {[0, 40, 80, 120, 160, 200, 240, 280, 320, 360, 400].map((wx, i) => (
+              <View key={`wave-${i}`} style={[styles.wave, { left: wx }]} />
+            ))}
+          </View>
+        )}
+
+        {/* Mountain peaks in background */}
+        {theme === 'mountain' && (
+          <>
+            <View style={[styles.mountainPeak, { left: 20, borderBottomWidth: 50, borderLeftWidth: 40, borderRightWidth: 40 }]}>
+              <View style={[styles.snowCap, { borderBottomWidth: 15, borderLeftWidth: 12, borderRightWidth: 12 }]} />
+            </View>
+            <View style={[styles.mountainPeak, { left: 140, borderBottomWidth: 65, borderLeftWidth: 50, borderRightWidth: 50 }]}>
+              <View style={[styles.snowCap, { borderBottomWidth: 18, borderLeftWidth: 14, borderRightWidth: 14 }]} />
+            </View>
+            <View style={[styles.mountainPeak, { left: 300, borderBottomWidth: 45, borderLeftWidth: 35, borderRightWidth: 35 }]}>
+              <View style={[styles.snowCap, { borderBottomWidth: 12, borderLeftWidth: 10, borderRightWidth: 10 }]} />
+            </View>
+          </>
+        )}
+
+        {/* Ground decorations per theme */}
+        {theme === 'meadow' && bushes.map((b, i) => (
           <View key={`bush-${i}`} style={[styles.bushWrapper, { left: b.x, transform: [{ scale: b.scale||1 }] }]}>
             <View style={[styles.bushCircle, { width: 40, height: 40, bottom: 0, left: 0, backgroundColor: '#2d5a27' }]} />
             <View style={[styles.bushCircle, { width: 50, height: 50, bottom: 10, left: 15, backgroundColor: '#3a7d32' }]} />
             <View style={[styles.bushCircle, { width: 35, height: 35, bottom: 0, left: 45, backgroundColor: '#2d5a27' }]} />
           </View>
         ))}
-        <View style={[styles.groundGrass, { backgroundColor: isSeaTheme ? '#154360' : '#73bf2e' }]} />
-        {animals.map((a, i) => (
-          <View key={`animal-${i}`} style={[styles.animalContainer, { left: a.x, bottom: 88 + (a.yOffset||0) }]}>
-            {isSeaTheme ? <DrawFish /> : <DrawRabbit />}
+        {theme === 'sea' && bushes.map((b, i) => (
+          <View key={`seaweed-${i}`} style={[styles.bushWrapper, { left: b.x, transform: [{ scale: b.scale||1 }] }]}>
+            <DrawSeaweed />
           </View>
         ))}
-        <Text style={styles.graffiti}>{isSeaTheme ? 'DEEP SEA VIBES' : 'FLIPPY BARD 2026'}</Text>
+        {theme === 'night' && bushes.map((b, i) => (
+          <View key={`deadtree-${i}`} style={[styles.bushWrapper, { left: b.x, transform: [{ scale: b.scale||1 }] }]}>
+            <DrawDeadTree />
+          </View>
+        ))}
+        {theme === 'mountain' && bushes.map((b, i) => (
+          <View key={`pine-${i}`} style={[styles.bushWrapper, { left: b.x, transform: [{ scale: b.scale||1 }] }]}>
+            <DrawPineTree />
+          </View>
+        ))}
+
+        <View style={[styles.groundGrass, { backgroundColor: THEME_COLORS[theme].grass }]} />
+        {animals.map((a, i) => (
+          <View key={`animal-${i}`} style={[styles.animalContainer, { left: a.x, bottom: 88 + (a.yOffset||0) }]}>
+            {theme === 'sea' ? <DrawFish /> : theme === 'night' ? <DrawOwl /> : theme === 'mountain' ? <DrawEagle /> : <DrawRabbit />}
+          </View>
+        ))}
+        <Text style={styles.graffiti}>{THEME_COLORS[theme].graffiti}</Text>
       </View>
 
       {/* Opponent mini-panel during multiplayer */}
@@ -1500,6 +1711,66 @@ const styles = StyleSheet.create({
   groundGrass: { position: 'absolute', top: 0, width: '100%', height: 12 },
   cloud: { position: 'absolute', backgroundColor: 'rgba(255,255,255,0.7)', zIndex: 0 },
   bubble: { position: 'absolute', backgroundColor: 'rgba(255,255,255,0.3)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)', zIndex: 0 },
+  nightCloud: { position: 'absolute', backgroundColor: 'rgba(40,40,60,0.6)', zIndex: 0 },
+
+  // Stone pipe (night theme)
+  stonePipe: { position: 'absolute', width: PIPE_WIDTH, backgroundColor: '#3a3a4a', borderWidth: 2, borderColor: '#2a2a3a', overflow: 'hidden' },
+  stoneCrack: { position: 'absolute', width: 2, backgroundColor: 'rgba(150,150,160,0.5)' },
+  stoneMoss: { position: 'absolute', left: 0, right: 0, height: 8, backgroundColor: '#2d5a27', borderRadius: 2 },
+
+  // Tree pipe leaf cluster (mountain theme)
+  treePipeLeafCluster: { position: 'absolute', bottom: 0, left: -5, right: -5, height: 20, flexDirection: 'row', justifyContent: 'center', overflow: 'visible' },
+  treePipeLeaf: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#3a7d32' },
+
+  // Coral polyps (sea theme)
+  coralPolyp: { position: 'absolute', width: 8, height: 8, borderRadius: 4, backgroundColor: '#f5b7b1' },
+
+  // Wave (sea ground top)
+  waveContainer: { position: 'absolute', top: -8, left: 0, right: 0, height: 12, flexDirection: 'row', overflow: 'hidden', zIndex: 1 },
+  wave: { position: 'absolute', width: 40, height: 16, borderRadius: 20, backgroundColor: '#2980b9', top: 4 },
+
+  // Moon & stars (night theme)
+  moon: { position: 'absolute', top: 60, right: 40, width: 50, height: 50, borderRadius: 25, backgroundColor: '#f5f5c6', zIndex: 1, overflow: 'hidden' },
+  moonCrater: { position: 'absolute', borderRadius: 10, backgroundColor: 'rgba(200,200,150,0.5)' },
+  star: { position: 'absolute', backgroundColor: '#ffffcc', zIndex: 1 },
+
+  // Mountain peaks (mountain ground)
+  mountainPeak: { position: 'absolute', top: -40, width: 0, height: 0, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#6b6b6b', borderStyle: 'solid', zIndex: 0 },
+  snowCap: { position: 'absolute', top: -2, alignSelf: 'center', width: 0, height: 0, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: 'white', borderStyle: 'solid' },
+
+  // Seaweed
+  seaweedContainer: { width: 20, height: 50, alignItems: 'center' },
+  seaweedStalk: { width: 4, height: 45, backgroundColor: '#27ae60', borderRadius: 2 },
+  seaweedLeaf: { position: 'absolute', width: 10, height: 6, backgroundColor: '#2ecc71', borderRadius: 3 },
+
+  // Owl (night theme)
+  owlBody: { width: 22, height: 26, backgroundColor: '#8B6914', borderRadius: 11 },
+  owlEarLeft: { position: 'absolute', top: -6, left: 2, width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 4, borderBottomWidth: 8, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#8B6914', borderStyle: 'solid' },
+  owlEarRight: { position: 'absolute', top: -6, right: 2, width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 4, borderBottomWidth: 8, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#8B6914', borderStyle: 'solid' },
+  owlEyeLeft: { position: 'absolute', top: 4, left: 2, width: 8, height: 8, borderRadius: 4, backgroundColor: '#f1c40f', justifyContent: 'center', alignItems: 'center' },
+  owlEyeRight: { position: 'absolute', top: 4, right: 2, width: 8, height: 8, borderRadius: 4, backgroundColor: '#f1c40f', justifyContent: 'center', alignItems: 'center' },
+  owlPupil: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#111' },
+  owlBeak: { position: 'absolute', top: 13, left: 8, width: 6, height: 5, backgroundColor: '#e67e22', borderRadius: 3 },
+
+  // Eagle (mountain theme)
+  eagleBody: { width: 28, height: 20, backgroundColor: '#5D2906', borderRadius: 10 },
+  eagleHead: { position: 'absolute', top: -4, right: 0, width: 14, height: 14, borderRadius: 7, backgroundColor: 'white' },
+  eagleWing: { position: 'absolute', top: -6, left: -4, width: 16, height: 10, backgroundColor: '#3E1C04', borderRadius: 5, transform: [{ rotate: '-15deg' }] },
+  eagleBeak: { position: 'absolute', top: 0, right: -6, width: 8, height: 5, backgroundColor: '#f1c40f', borderRadius: 2 },
+  eagleEye: { position: 'absolute', top: -1, right: 4, width: 3, height: 3, borderRadius: 2, backgroundColor: '#111' },
+
+  // Pine tree (mountain theme)
+  pineContainer: { width: 40, height: 55, alignItems: 'center' },
+  pineTriangle: { position: 'absolute', width: 0, height: 0, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#2d5a27', borderStyle: 'solid', alignSelf: 'center' },
+  pineTrunk: { position: 'absolute', bottom: 0, width: 6, height: 10, backgroundColor: '#5D2906' },
+
+  // Dead tree (night theme)
+  deadTreeContainer: { width: 30, height: 50, alignItems: 'center' },
+  deadTreeTrunk: { position: 'absolute', bottom: 0, width: 5, height: 40, backgroundColor: '#1a1a2e', borderRadius: 1 },
+  deadTreeBranchLeft: { position: 'absolute', bottom: 28, left: 4, width: 12, height: 3, backgroundColor: '#1a1a2e', transform: [{ rotate: '-30deg' }] },
+  deadTreeBranchRight: { position: 'absolute', bottom: 22, right: 2, width: 10, height: 3, backgroundColor: '#1a1a2e', transform: [{ rotate: '25deg' }] },
+  deadTreeBranchSmall: { position: 'absolute', bottom: 34, right: 6, width: 8, height: 2, backgroundColor: '#1a1a2e', transform: [{ rotate: '35deg' }] },
+
   animalContainer: { position: 'absolute', zIndex: 5 },
   rabbitBody: { width: 20, height: 25, backgroundColor: '#eee', borderRadius: 10 },
   rabbitEarLeft: { position: 'absolute', top: -10, left: 2, width: 6, height: 15, backgroundColor: '#eee', borderRadius: 5 },
