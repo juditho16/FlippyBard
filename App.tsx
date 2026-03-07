@@ -428,7 +428,7 @@ export default function App() {
   const level = Math.floor(score / 5) + 1;
   const theme: Theme = getTheme(level);
 
-  const requestRef = useRef<number>();
+  const requestRef = useRef<number | undefined>(undefined);
   const lastFrameTimeRef = useRef<number | null>(null);
   const lastPipeSpawnRef = useRef<number>(0);
   const gameOverHandledRef = useRef(false);
