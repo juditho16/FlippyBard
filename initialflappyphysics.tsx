@@ -76,7 +76,7 @@ export default function App() {
     return JSON.parse(localStorage.getItem('flappyLeaderboard') || '[]');
   });
   
-  const requestRef = useRef<number>();
+  const requestRef = useRef<number | undefined>(undefined);
   const lastPipeSpawnRef = useRef<number>(0);
 
   const level = Math.floor(score / 5) + 1;
