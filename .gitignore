@@ -21,3 +21,4 @@ v
 
 # build cache
 .cache/
+.expo/
